@@ -118,6 +118,21 @@ Visit `http://localhost:3000` after startup.
 
 ---
 
+## Environment Variables Reference
+
+| Variable | Default | Description | Required |
+|----------------------|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|----------|
+| `STELLAR_NETWORK` | `testnet` | Target Stellar network. Accepted values: `testnet` or `mainnet`. Controls which Horizon server is used and gates testnet-only endpoints such as Friendbot. | ⬜ No |
+| `HORIZON_URL` | *(derived from `STELLAR_NETWORK`)* | Override the Horizon server URL. When omitted, defaults to `https://horizon-testnet.stellar.org` for `testnet` and `https://horizon.stellar.org` for `mainnet`. | ⬜ No |
+| `PORT` | `3000` | TCP port the Express server listens on. | ⬜ No |
+| `NODE_ENV` | `development` | Runtime environment. Set to `production` to enable combined HTTP logging and sanitised error messages. Set to `test` to suppress console output during test runs. | ⬜ No |
+| `RATE_LIMIT_MAX` | `100` | Maximum number of requests allowed per IP address per 15-minute window. Applies to the global rate limiter. | ⬜ No |
+| `CACHE_TTL_MS` | `5000` | Cache time-to-live in milliseconds for the `/network-status` and `/fee-estimate` endpoints. | ⬜ No |
+
+> All variables are optional — the server starts with sensible defaults when none are set. Set `STELLAR_NETWORK=mainnet` explicitly before deploying to production to avoid accidentally pointing at testnet.
+
+---
+
 ## Understanding Stellar Account Reserves
 
 Stellar requires all accounts to maintain a **minimum XLM balance** to exist on the ledger. This mechanism deters ledger spam and ensures the network remains efficient.
@@ -479,6 +494,122 @@ GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN
 
 ---
 
+### `GET /account/:id/pool-positions`
+Returns all liquidity pool positions for an account with calculated share values and equivalent reserves.
+
+**Example:**
+```
+GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/pool-positions
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "poolId": "67339253ccd0390f4886b5952d7f8d68f70f61280d908e234190c609c95b6026",
+      "shares": "1000.0000000",
+      "sharePercent": "5.2500",
+      "totalPoolShares": "19047.6190476",
+      "reserveA": {
+        "asset": "native",
+        "totalAmount": "50000.0000000",
+        "equivalentAmount": "2625.0000000"
+      },
+      "reserveB": {
+        "asset": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "totalAmount": "50000.0000000",
+        "equivalentAmount": "2625.0000000"
+      },
+      "feeBp": 30,
+      "totalTrustlines": 42,
+      "lastModifiedLedger": 12345678
+    }
+  ],
+  "meta": {
+    "count": 1,
+    "accountId": "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+  }
+}
+```
+
+**Key Fields:**
+- `shares`: The account's pool share tokens
+- `sharePercent`: Percentage of total pool ownership
+- `equivalentAmount`: The account's proportional share of each reserve asset
+- `feeBp`: Pool fee in basis points (30 = 0.3%)
+
+---
+
+### `GET /account/:id/transactions/search`
+Searches transaction history for a Stellar account and filters results by memo content. Useful for developers building payment reference tracking systems.
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `memo` | string | Yes | Memo value to search for |
+| `memo_type` | string | No | Filter by memo type: `text`, `id`, `hash`, `return` |
+| `limit` | number | No | Number of results (default: 10, max: 200) |
+| `cursor` | string | No | Pagination cursor from previous response |
+| `order` | string | No | Sort order: `asc` or `desc` (default: `desc`) |
+
+**Example:**
+```
+GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/transactions/search?memo=invoice-123
+GET /account/GAAZI4.../transactions/search?memo=12345&memo_type=id
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "123456789",
+      "hash": "abc123...",
+      "ledger": 12345678,
+      "createdAt": "2024-07-01T12:00:00Z",
+      "sourceAccount": "GAAZI4...",
+      "fee": {
+        "charged": "100",
+        "account": "GAAZI4..."
+      },
+      "feeSummary": {
+        "chargedInStroops": 100,
+        "chargedInXLM": "0.0000100",
+        "perOperationInStroops": 100,
+        "perOperationInXLM": "0.0000100"
+      },
+      "operationCount": 1,
+      "memoType": "text",
+      "memo": "invoice-123",
+      "successful": true,
+      "envelopeXdr": "..."
+    }
+  ],
+  "meta": {
+    "count": 1,
+    "limit": 10,
+    "order": "desc",
+    "searchQuery": {
+      "memo": "invoice-123",
+      "memoType": "any"
+    },
+    "nextCursor": "123456789",
+    "hasMore": false
+  }
+}
+```
+
+**Search Behavior:**
+- **Text memos**: Case-insensitive substring match (e.g., "inv" matches "invoice-123")
+- **ID/Hash/Return memos**: Exact match only
+- Transactions with `memo_type: none` are excluded from results
+- Only successful transactions are returned
+
+---
+
 ### `GET /transactions/:id`
 
 Returns paginated transaction history for an account.
@@ -507,6 +638,62 @@ Returns metadata and statistics for a specific Stellar asset.
 ```
 GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
 ```
+
+---
+
+### `GET /dex/spread/:sellAsset/:buyAsset`
+Calculates the bid-ask spread for a trading pair on the Stellar DEX. Helps developers and traders assess market liquidity at a glance.
+
+**Asset Format**: `CODE:ISSUER` (e.g., `XLM:native`, `USDC:GA5Z...`)
+
+**Example:**
+```
+GET /dex/spread/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+GET /dex/spread/USDC:GA5Z.../EURC:GB...
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "bestBid": {
+      "price": "0.0850000",
+      "amount": "1000.0000000"
+    },
+    "bestAsk": {
+      "price": "0.0855000",
+      "amount": "500.0000000"
+    },
+    "spreadAbsolute": "0.0005000",
+    "spreadPercent": "0.5882",
+    "midPrice": "0.0852500",
+    "liquidity": "high",
+    "orderBookDepth": {
+      "bids": 25,
+      "asks": 30,
+      "totalBidVolume": "50000.0000000",
+      "totalAskVolume": "45000.0000000",
+      "totalVolume": "95000.0000000"
+    }
+  }
+}
+```
+
+**Key Fields:**
+- `bestBid`: Highest buy order price and amount
+- `bestAsk`: Lowest sell order price and amount
+- `spreadAbsolute`: Difference between ask and bid prices
+- `spreadPercent`: Spread as percentage of mid price
+- `midPrice`: Average of best bid and ask
+- `liquidity`: Market depth assessment (high/medium/low)
+  - **high**: Total volume ≥ 10,000
+  - **medium**: Total volume ≥ 1,000
+  - **low**: Total volume < 1,000
+
+**Error Responses:**
+- `400`: Invalid asset format
+- `404`: No order book exists for trading pair
 
 ---
 
@@ -668,3 +855,56 @@ stellarkit-api/
 ## 📄 License
 
 [MIT](LICENSE)
+
+---
+
+## Rate Limiting
+
+The StellarKit API enforces request limits to protect the service and provide fair access for all clients. By default the API applies the following limit per originating IP address:
+
+- **Default:** 100 requests per 15 minutes (per IP)
+
+When requests are served, the API includes the following response headers so clients can observe and adapt to limits:
+
+- `RateLimit-Limit`: The maximum number of requests allowed in the current window.
+- `RateLimit-Remaining`: How many requests remain in the current window.
+- `RateLimit-Reset`: UNIX epoch timestamp (seconds) when the current window resets.
+
+If a client exceeds the configured limit the API will return HTTP `429 Too Many Requests`. Example HTTP headers for a 429 response:
+
+```
+HTTP/1.1 429 Too Many Requests
+RateLimit-Limit: 100
+RateLimit-Remaining: 0
+RateLimit-Reset: 1710000000
+Content-Type: application/json
+```
+
+Example JSON body returned on rate limit exceed:
+
+```json
+{
+  "success": false,
+  "error": {
+    "status": 429,
+    "message": "Too many requests, rate limit exceeded"
+  }
+}
+```
+
+Configuration
+
+Rate limiting behavior can be adjusted via environment variables — no code changes are required. The API supports the following variables (defaults shown):
+
+- `RATE_LIMIT_MAX_REQUESTS` — Maximum requests per window (default: `100`)
+- `RATE_LIMIT_WINDOW_MINUTES` — Window size in minutes (default: `15`)
+
+After changing environment variables, restart the service for the new values to take effect.
+
+Client recommendations
+
+- Watch `RateLimit-Remaining` and proactively delay requests when it is low.
+- On `429` responses, use the `RateLimit-Reset` timestamp to wait until the window resets.
+- Implement retries with exponential backoff and jitter instead of tight loops.
+
+Note: This README section documents runtime behavior only — there are intentionally no code changes in this PR.
