@@ -1910,4 +1910,111 @@ router.get("/:id/age", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /account/:id/volume?days=30
+ * Computes total transaction volume for a Stellar account over the last N days,
+ * broken down by asset.
+ *
+ * Query params:
+ *   - days  (number, default: 30, max: 90)
+ *
+ * @example
+ * GET /account/GAAZI4.../volume?days=7
+ */
+router.get("/:id/volume", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const days = parseInt(req.query.days || "30", 10);
+    if (isNaN(days) || days < 1 || days > 90) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          type: "ValidationError",
+          message: "days must be a number between 1 and 90.",
+        },
+      });
+    }
+
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // Paginate through all payment operations in the window (asc so we can stop early)
+    const volumeMap = {}; // assetKey -> { assetCode, assetIssuer, totalSent, totalReceived }
+    let totalTransactions = 0;
+    let cursor;
+    let done = false;
+
+    while (!done) {
+      let query = server.payments().forAccount(id).limit(200).order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const page = await query.call();
+      const records = page.records || [];
+
+      if (records.length === 0) break;
+
+      for (const op of records) {
+        const createdAt = new Date(op.created_at);
+        if (createdAt < since) {
+          cursor = op.paging_token;
+          continue;
+        }
+        // Records are ascending; once we pass 90 days window we're done
+        // (no upper bound needed — we want up to now)
+
+        if (!op.transaction_successful) {
+          cursor = op.paging_token;
+          continue;
+        }
+
+        const assetCode = op.asset_code || "XLM";
+        const assetIssuer = op.asset_issuer || null;
+        const assetKey = assetIssuer ? `${assetCode}:${assetIssuer}` : assetCode;
+        const amount = parseFloat(op.amount || op.starting_balance || "0");
+
+        if (!volumeMap[assetKey]) {
+          volumeMap[assetKey] = { assetCode, assetIssuer, totalSent: 0, totalReceived: 0 };
+        }
+
+        // Determine direction relative to the queried account
+        const isSent =
+          (op.type === "payment" && op.from === id) ||
+          (op.type === "create_account" && op.funder === id);
+
+        if (isSent) {
+          volumeMap[assetKey].totalSent += amount;
+        } else {
+          volumeMap[assetKey].totalReceived += amount;
+        }
+
+        totalTransactions++;
+        cursor = op.paging_token;
+      }
+
+      // If we got fewer than the page size, we've exhausted history
+      if (records.length < 200) done = true;
+    }
+
+    const volumeByAsset = Object.values(volumeMap).map((v) => ({
+      assetCode: v.assetCode,
+      assetIssuer: v.assetIssuer,
+      totalSent: v.totalSent.toFixed(7),
+      totalReceived: v.totalReceived.toFixed(7),
+    }));
+
+    return success(res, {
+      period: {
+        days,
+        from: since.toISOString(),
+        to: new Date().toISOString(),
+      },
+      totalTransactions,
+      volumeByAsset,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
 module.exports = router;

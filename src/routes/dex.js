@@ -332,4 +332,102 @@ router.get("/depth/:sellAsset/:buyAsset", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /dex/price/:sellAsset/:buyAsset?amount=:amount
+ * Calculates the effective exchange rate between two assets using the best
+ * available payment path on the Stellar DEX.
+ *
+ * Asset format: CODE:ISSUER or XLM:native
+ * amount query param: amount of sellAsset to convert (default: 1)
+ *
+ * @example
+ * GET /dex/price/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN?amount=100
+ */
+router.get("/price/:sellAsset/:buyAsset", async (req, res, next) => {
+  try {
+    const { sellAsset, buyAsset } = req.params;
+    const amount = req.query.amount || "1";
+
+    const parseStellarAsset = (assetString) => {
+      const parts = assetString.split(":");
+      if (parts.length !== 2) {
+        throw new Error(`Invalid asset format: "${assetString}". Expected format: CODE:ISSUER`);
+      }
+      const [code, issuer] = parts;
+      if (code.toUpperCase() === "XLM" && issuer.toLowerCase() === "native") {
+        return Asset.native();
+      }
+      validateAssetCode(code);
+      validateAccountId(issuer);
+      return new Asset(code.toUpperCase(), issuer);
+    };
+
+    // Validate amount
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: { type: "ValidationError", message: "amount must be a positive number." },
+      });
+    }
+
+    let selling, buying;
+    try {
+      selling = parseStellarAsset(sellAsset);
+      buying = parseStellarAsset(buyAsset);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: { type: "ValidationError", message: err.message },
+      });
+    }
+
+    // Use strictSendPaths: given a fixed source amount, find the best destination amount
+    const formattedAmount = parsedAmount.toFixed(7);
+    const pathsResponse = await server
+      .strictSendPaths(selling, formattedAmount, [buying])
+      .call();
+
+    const records = pathsResponse.records || [];
+
+    if (records.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { type: "NotFound", message: "No payment path exists between these two assets." },
+      });
+    }
+
+    // Best path = highest destination amount
+    const best = records.reduce((a, b) =>
+      parseFloat(a.destination_amount) >= parseFloat(b.destination_amount) ? a : b
+    );
+
+    const sellAmount = parseFloat(best.source_amount);
+    const buyAmount = parseFloat(best.destination_amount);
+    const effectiveRate = buyAmount / sellAmount;
+
+    const bestPath = best.path.map((hop) => ({
+      assetCode: hop.asset_code || "XLM",
+      assetIssuer: hop.asset_issuer || "native",
+    }));
+
+    return success(res, {
+      sellAsset,
+      buyAsset,
+      sellAmount: sellAmount.toFixed(7),
+      buyAmount: buyAmount.toFixed(7),
+      effectiveRate: effectiveRate.toFixed(7),
+      bestPath,
+    });
+  } catch (err) {
+    if (err.response && err.response.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: { type: "NotFound", message: "No payment path exists between these two assets." },
+      });
+    }
+    next(err);
+  }
+});
+
 module.exports = router;
