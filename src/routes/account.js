@@ -573,6 +573,153 @@ router.get("/:id/payments", async (req, res, next) => {
  * GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/timeline
  * GET /account/GAAZI4.../timeline?limit=20
  */
+/**
+ * GET /account/:id/operation-breakdown
+ * Analyzes the last 200 operations and returns a breakdown by operation type.
+ * Useful for understanding how an account is being used.
+ *
+ * @param {string} id - Stellar account public key (G...)
+ */
+router.get("/:id/operation-breakdown", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    // Fetch last 200 operations
+    const opResponse = await server
+      .operations()
+      .forAccount(id)
+      .limit(200)
+      .order("desc")
+      .call();
+
+    const records = opResponse.records;
+    const total = records.length;
+
+    if (total === 0) {
+      return success(res, {
+        total: 0,
+        breakdown: [],
+        mostUsedOperation: null,
+        leastUsedOperation: null,
+      });
+    }
+
+    const counts = {};
+    records.forEach((op) => {
+      counts[op.type] = (counts[op.type] || 0) + 1;
+    });
+
+    const breakdown = Object.entries(counts)
+      .map(([type, count]) => ({
+        type,
+        count,
+        percentage: parseFloat(((count / total) * 100).toFixed(2)),
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return success(res, {
+      total,
+      breakdown,
+      mostUsedOperation: breakdown[0].type,
+      leastUsedOperation: breakdown[breakdown.length - 1].type,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * GET /account/:id/offer-history
+ * Returns the full history of offers created, updated, and deleted by an account.
+ *
+ * Query params:
+ *   - limit  (number, default: 10)
+ *   - order  ("asc" | "desc", default: "desc")
+ *   - cursor (string, pagination cursor)
+ *
+ * @param {string} id - Stellar account public key (G...)
+ */
+router.get("/:id/offer-history", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const limit = validateLimit(req.query.limit || 10, 200);
+    const order = ["asc", "desc"].includes(req.query.order)
+      ? req.query.order
+      : "desc";
+    const cursor = req.query.cursor || undefined;
+
+    let query = server
+      .operations()
+      .forAccount(id)
+      .limit(limit)
+      .order(order);
+
+    if (cursor) query = query.cursor(cursor);
+
+    const opResponse = await query.call();
+    const records = opResponse.records;
+
+    const offerOps = records
+      .filter((op) =>
+        [
+          "manage_sell_offer",
+          "manage_buy_offer",
+          "create_passive_sell_offer",
+        ].includes(op.type)
+      )
+      .map((op) => {
+        let offerType = "updated";
+        if (op.type === "create_passive_sell_offer") {
+          offerType = "created";
+        } else if (parseFloat(op.amount) === 0) {
+          offerType = "deleted";
+        } else {
+          // In Stellar, if we can't see the original request, it's hard to be 100% sure if it was created or updated 
+          // just from the operation record if offer_id is already assigned.
+          // But usually, if it's the first time that offerId appears for this account, it was created.
+          // For this API, we'll label it 'created' if it appears to be a new offer or 'updated' otherwise.
+          // many developers use amount > 0 as updated/created.
+          // We'll use a heuristic or just label as requested.
+          // If the op has a price but it was a 'manage' op, we'll call it 'created/updated'.
+          offerType = op.offer_id === "0" ? "created" : "updated";
+        }
+
+        const formatAsset = (type, code, issuer) => {
+          if (type === "native") return "XLM";
+          return `${code}:${issuer}`;
+        };
+
+        return {
+          offerId: op.offer_id,
+          type: offerType,
+          sellingAsset: formatAsset(op.selling_asset_type, op.selling_asset_code, op.selling_asset_issuer),
+          buyingAsset: formatAsset(op.buying_asset_type, op.buying_asset_code, op.buying_asset_issuer),
+          amount: op.amount,
+          price: op.price,
+          timestamp: op.created_at,
+          transactionHash: op.transaction_hash,
+        };
+      });
+
+    const nextCursor = records.length > 0 ? records[records.length - 1].paging_token : null;
+
+    return success(res, offerOps, {
+      meta: {
+        count: offerOps.length,
+        limit,
+        order,
+        nextCursor,
+        hasMore: records.length === limit,
+      },
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
 router.get("/:id/timeline", async (req, res, next) => {
   try {
     const { id } = req.params;

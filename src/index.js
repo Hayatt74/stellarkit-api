@@ -21,6 +21,7 @@ const dexRouter = require("./routes/dex");
 const liquidityPoolRouter = require("./routes/liquidityPool");
 const streamRouter = require("./routes/stream");
 const utilsRouter = require("./routes/utils");
+const claimableBalancesRouter = require("./routes/claimableBalances");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -61,6 +62,7 @@ app.use("/dex", dexRouter);
 app.use("/liquidity-pools", liquidityPoolRouter);
 app.use("/stream", streamRouter);
 app.use("/utils", utilsRouter);
+app.use("/claimable-balances", claimableBalancesRouter);
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
@@ -88,6 +90,7 @@ app.get("/", (req, res) => {
         { method: "GET", path: "/account/:id/transactions/search", description: "Search account transactions by memo content" },
         { method: "GET", path: "/transactions/:id", description: "Transaction history for an account" },
         { method: "GET", path: "/transactions/:id/operations", description: "Operation history for an account" },
+        { method: "GET", path: "/claimable-balances/:id/evaluate/:accountId", description: "Evaluate claimability of a balance for a specific account" },
         { method: "GET", path: "/asset/:code/:issuer", description: "Asset metadata and statistics" },
         { method: "GET", path: "/asset/:code/:issuer/holders", description: "Paginated accounts holding an asset" },
         { method: "GET", path: "/asset/search?code=:code", description: "Search assets by code across all issuers" },
