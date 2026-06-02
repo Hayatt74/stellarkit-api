@@ -1200,4 +1200,90 @@ describe("GET /account/:id/trustlines", () => {
     expect(res.body.success).toBe(false);
   });
 });
+
+// ── Horizon Error Translator ───────────────────────────────────────────────
+describe("horizonErrors translator", () => {
+  const { translateHorizonError, HORIZON_ERROR_MESSAGES } = require("../src/utils/horizonErrors");
+
+  it("translates all covered error codes to non-empty strings", () => {
+    for (const code of Object.keys(HORIZON_ERROR_MESSAGES)) {
+      const result = translateHorizonError(code);
+      expect(typeof result).toBe("string");
+      expect(result.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("covers at least 15 error codes", () => {
+    expect(Object.keys(HORIZON_ERROR_MESSAGES).length).toBeGreaterThanOrEqual(15);
+  });
+
+  it("returns null for unknown codes", () => {
+    expect(translateHorizonError("unknown_code")).toBeNull();
+    expect(translateHorizonError("")).toBeNull();
+  });
+
+  it("translates tx_bad_seq", () => {
+    const msg = translateHorizonError("tx_bad_seq");
+    expect(msg).toContain("sequence");
+  });
+
+  it("translates tx_insufficient_fee", () => {
+    const msg = translateHorizonError("tx_insufficient_fee");
+    expect(msg).toContain("fee");
+  });
+
+  it("translates tx_bad_auth", () => {
+    const msg = translateHorizonError("tx_bad_auth");
+    expect(msg).toContain("signature");
+  });
+
+  it("translates op_no_destination", () => {
+    const msg = translateHorizonError("op_no_destination");
+    expect(msg).toContain("destination");
+  });
+
+  it("translates op_no_trust", () => {
+    const msg = translateHorizonError("op_no_trust");
+    expect(msg).toContain("trustline");
+  });
+
+  it("translates op_line_full", () => {
+    const msg = translateHorizonError("op_line_full");
+    expect(msg).toContain("full");
+  });
+
+  it("translates op_underfunded", () => {
+    const msg = translateHorizonError("op_underfunded");
+    expect(msg).toContain("funds");
+  });
+
+  it("translates op_low_reserve", () => {
+    const msg = translateHorizonError("op_low_reserve");
+    expect(msg).toContain("reserve");
+  });
+
+  it("error handler includes code and message for known Horizon errors", async () => {
+    const request = require("supertest");
+    const app = require("../src/index");
+    const { server } = require("../src/config/stellar");
+
+    const horizonErr = new Error("Horizon error");
+    horizonErr.response = {
+      status: 400,
+      data: {
+        title: "Transaction Failed",
+        detail: "tx failed",
+        extras: { result_codes: { transaction: "tx_bad_seq" } },
+      },
+    };
+    jest.spyOn(server, "loadAccount").mockRejectedValue(horizonErr);
+
+    const res = await request(app).get(
+      "/account/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+    );
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe("tx_bad_seq");
+    expect(res.body.error.message).toContain("sequence");
+    jest.restoreAllMocks();
+  });
 });

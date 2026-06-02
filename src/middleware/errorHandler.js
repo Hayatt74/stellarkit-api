@@ -2,6 +2,7 @@
  * Centralised error handler middleware.
  * Formats Horizon / Stellar SDK errors into consistent JSON responses.
  */
+const { translateHorizonError } = require("../utils/horizonErrors");
 
 /**
  * Logs 4xx and 5xx responses to the console.
@@ -26,7 +27,13 @@ function errorHandler(err, req, res, next) {
   if (err.response && err.response.data) {
     const horizonError = err.response.data;
     const status = err.response.status || 400;
-    const message = horizonError.detail || horizonError.title || "Horizon Error";
+    const resultCodes = horizonError.extras && horizonError.extras.result_codes;
+    const code =
+      resultCodes &&
+      (resultCodes.transaction ||
+        (resultCodes.operations && resultCodes.operations[0]));
+    const humanMessage = code ? translateHorizonError(code) : null;
+    const message = humanMessage || horizonError.detail || horizonError.title || "Horizon Error";
     logError(status, req, message);
     return res.status(status).json({
       success: false,
@@ -36,6 +43,8 @@ function errorHandler(err, req, res, next) {
         detail: horizonError.detail || "An error occurred with the Stellar network.",
         status: horizonError.status || err.response.status,
         extras: horizonError.extras || null,
+        ...(code && { code }),
+        ...(humanMessage && { message: humanMessage }),
       },
     });
   }
