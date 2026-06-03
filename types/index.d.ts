@@ -261,6 +261,23 @@ export interface AccountResponse {
 }
 
 /**
+ * Response from GET /account/:id/age
+ * Returns account age and longevity metrics for trust and reputation systems.
+ */
+export interface AccountAgeResponse {
+  success: true
+  data: {
+    publicKey: StellarPublicKey
+    createdAtLedger: number
+    createdAt: ISOTimestamp
+    ageInDays: number
+    ageInMonths: number
+    ageInYears: number
+    maturity: 'new' | 'established' | 'veteran'
+  }
+}
+
+/**
  * Response from GET /account/:id/balances
  * Returns only native XLM and asset balances for a Stellar account.
  */
@@ -347,6 +364,15 @@ export interface FeeEstimateResponse {
       p95: string
       p99: string
     }
+    history: Array<{
+      ledger: number
+      baseFee: number
+      capacityUsage: number
+    }>
+    // Human-friendly additions
+    context: string
+    networkCongestion: 'low' | 'medium' | 'high'
+    recommendation: string
   }
 }
 
@@ -565,5 +591,4 @@ export interface AssetSearchParams {
 // ============================================================
 
 declare module 'stellarkit-api' {
-  export * from '.'
 }
